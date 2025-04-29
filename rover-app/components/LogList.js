@@ -6,7 +6,7 @@ export default function LogList() {
 
   useEffect(() => {
     // Connect to Socket.IO server (replace <laptop-ip> with actual IP)
-    const socket = io('http://192.168.0.135:3000', {
+    const socket = io('http://localhost:30000', {
       reconnection: true,
     });
 

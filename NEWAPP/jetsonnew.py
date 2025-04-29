@@ -8,7 +8,7 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fronta
 # Initialize camera
 cap = cv2.VideoCapture(0)  # Using the first camera (you can adjust if needed)
 frame_rate = 20  # Desired frame rate
-server_url = 'http://192.168.0.116:3000/video_feed'  # Replace with your server's IP and endpoint
+server_url = 'http://172.168.5.122:3000/video_feed'  # Replace with your server's IP and endpoint
 
 try:
     while True:

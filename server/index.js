@@ -1,33 +1,37 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
+const { spawn } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: 'http://localhost:3001', // Allow Next.js app
+    origin: 'http://localhost:3001',
     methods: ['GET', 'POST'],
   },
 });
 
-// Serve a basic endpoint for testing
-app.get('/', (req, res) => {
-  res.send('Socket.IO server running');
+// Start the Python face recognition script
+const pythonProcess = spawn('python', ['face_recognition_server.py']);
+pythonProcess.stdout.on('data', (data) => {
+  console.log(`Python: ${data}`);
+});
+pythonProcess.stderr.on('data', (data) => {
+  console.error(`Python Error: ${data}`);
 });
 
-// Handle Socket.IO connections
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // Receive and broadcast video frames
+  // Forward video frames from clients to the Python script
   socket.on('video_frame', (data) => {
-    socket.broadcast.emit('video_frame', data);
+    io.emit('video_frame', data); // Forward to Python script
   });
 
-  // Receive and broadcast logs
-  socket.on('log', (data) => {
-    socket.broadcast.emit('log', data);
+  // Forward processed frames from Python to clients
+  socket.on('processed_frame', (data) => {
+    socket.broadcast.emit('video_frame', data);
   });
 
   socket.on('disconnect', () => {
@@ -35,7 +39,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start server
 const PORT = 3000;
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

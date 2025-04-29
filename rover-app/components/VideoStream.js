@@ -6,7 +6,7 @@ export default function VideoStream() {
 
   useEffect(() => {
     // Connect to Socket.IO server (replace <laptop-ip> with actual IP)
-    const socket = io('192.168.46.1:3000', {
+    const socket = io('http://localhost:3000', {
       reconnection: true,
     });
 
