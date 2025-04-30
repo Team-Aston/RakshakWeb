@@ -4,6 +4,8 @@ npm-debug.log
 yarn-error.log
 package-lock.json
 yarn.lock
+dlib/
+node_modules/
 
 # Next.js build output
 .next/
