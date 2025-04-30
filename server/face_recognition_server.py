@@ -5,6 +5,7 @@ import numpy as np
 from flask import Flask
 import face_recognition # Import face_recognition library
 import os # Added os import
+import time # Import time for potential delays
 
 # Print Python path and library location for debugging
 print("--- Debug Info ---")
@@ -18,13 +19,13 @@ print("------------------")
 
 # Initialize Flask and Socket.IO
 app = Flask(__name__)
-sio = socketio.Client()
+sio = socketio.Client(reconnection_delay=1, reconnection_delay_max=10)
 
 # Paths for storing encoded faces - Adjust as needed
 encoding_file = "face_encodings.npy"
 names_file = "face_names.npy"
 # IMPORTANT: Update this path to your actual image folder
-people_images_folder = "/home/tanishq/Desktop/my_images" # <--- UPDATE THIS PATH
+people_images_folder = "/media/shoaib/STUDYLINUX/Prakalp/RakshakWeb/my_images" # <--- Using path from workspace structure
 
 # Variables to hold encodings
 known_face_encodings = []
@@ -42,10 +43,13 @@ def save_encodings():
 def load_encodings():
     """Loads encodings if the file exists."""
     global known_face_encodings, known_face_names
-    if os.path.exists(encoding_file) and os.path.exists(names_file):
+    encoding_path = os.path.join(os.path.dirname(__file__), encoding_file) # Look in script's directory
+    names_path = os.path.join(os.path.dirname(__file__), names_file)       # Look in script's directory
+
+    if os.path.exists(encoding_path) and os.path.exists(names_path):
         try:
-            known_face_encodings = np.load(encoding_file, allow_pickle=True).tolist()
-            known_face_names = np.load(names_file, allow_pickle=True).tolist()
+            known_face_encodings = np.load(encoding_path, allow_pickle=True).tolist()
+            known_face_names = np.load(names_path, allow_pickle=True).tolist()
             # Basic validation
             if isinstance(known_face_encodings, list) and isinstance(known_face_names, list) and len(known_face_encodings) == len(known_face_names):
                  return True
@@ -62,13 +66,17 @@ if load_encodings():
     print(f"✅ Loaded {len(known_face_encodings)} known faces from cache.")
 else:
     print("🔍 Loading known faces from images...")
-    if not os.path.isdir(people_images_folder):
-         print(f"❌ Error: Image folder not found at {people_images_folder}. Please create it and add images.")
+    # Use absolute path based on workspace root provided
+    absolute_people_images_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'my_images')) # Go up one level from server/
+    print(f"Looking for images in: {absolute_people_images_folder}")
+
+    if not os.path.isdir(absolute_people_images_folder):
+         print(f"❌ Error: Image folder not found at {absolute_people_images_folder}. Please create it and add images relative to the project root.")
          # Optionally exit or handle this case differently
          # exit(1) # Or raise an error
     else:
-        for person_name in os.listdir(people_images_folder):
-            person_folder = os.path.join(people_images_folder, person_name)
+        for person_name in os.listdir(absolute_people_images_folder):
+            person_folder = os.path.join(absolute_people_images_folder, person_name)
             if os.path.isdir(person_folder):
                 for filename in os.listdir(person_folder):
                     if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
@@ -76,137 +84,169 @@ else:
                         try:
                             print(f"Processing {img_path} for {person_name}...")
                             image = face_recognition.load_image_file(img_path)
-                            encodings = face_recognition.face_encodings(image)
+                            # Use CNN model for encoding generation for better accuracy if possible, fallback to hog
+                            encodings = face_recognition.face_encodings(image, model="cnn")
+                            if not encodings:
+                                print(f"Trying HOG model for {filename}...")
+                                encodings = face_recognition.face_encodings(image, model="hog")
+
                             if encodings:
                                 known_face_encodings.append(encodings[0])
                                 known_face_names.append(person_name)
                                 print(f"✅ Encoded: {filename} for {person_name}")
                             else:
-                                print(f"⚠️ Warning: No face found in {filename}, skipping...")
+                                print(f"⚠️ Warning: No face found in {filename} using either model, skipping...")
                         except Exception as e:
                             print(f"❌ Error processing {filename}: {e}")
 
         if known_face_encodings:
-            save_encodings()
+            save_encodings() # Save in script's directory
         else:
             print("❌ Warning: No faces found or encoded. Face recognition will only detect 'Unknown'.")
             # Consider if the server should run without known faces
             # raise ValueError("No faces found. Ensure images contain clear faces.")
 
-print(f"🎉 Ready! Using {len(known_face_encodings)} known face(s).")
+print(f"🎉 Ready! Using {len(known_face_encodings)} known face(s).\\n")
 
-# Add dictionaries for smoothing
-smoothed_boxes = {}
-frame_history = {}
-max_history = 5  # Number of frames to average over
-smoothing_factor = 0.8 # Smoothing factor (higher = smoother, but more lag)
+# --- Parameters ---
+# Recognition tolerance (lower = stricter matching) - Adjusting for stability
+recognition_tolerance = 0.5 # Increased from 0.4
+# Face detection model ('hog' is faster, 'cnn' is slower but more accurate) - Using value from hi.py
+detection_model = "hog"
+# Frame resize factor for processing (1.0 = original size)
+resize_factor = 1.0 # Ensure this is 1.0 to avoid scaling issues
 
-# Connect to the Node.js server
+# --- Socket.IO Event Handlers ---
+@sio.event
+def connect():
+    print("✅ Connection established with server")
+
+@sio.event
+def connect_error(data):
+    print(f"❌ Connection failed: {data}")
+
+@sio.event
+def disconnect():
+    print("🔌 Disconnected from server")
+
+
+# --- Connect to the Node.js server ---
+NODE_SERVER_URL = 'http://localhost:3000' # Make sure this matches your Node.js server
+print(f"Attempting to connect to Node.js server at {NODE_SERVER_URL}...")
 try:
-    sio.connect('http://localhost:3000')  # Replace with your Node.js server address
-    print("Connected to Node.js server")
-except Exception as e:
-    print(f"Connection to Node.js server failed: {e}")
+    sio.connect(NODE_SERVER_URL, wait_timeout=10)
+except socketio.exceptions.ConnectionError as e:
+    print(f"❌ Connection to Node.js server failed: {e}")
     exit(1)
+
 
 @sio.on('video_frame')
 def process_frame(data):
-    global known_face_encodings, known_face_names, smoothed_boxes, frame_history # Ensure access to global lists and smoothing dicts
+    global known_face_encodings, known_face_names
+
+    if not sio.connected or '/' not in sio.namespaces:
+        print("Warning: process_frame called but not connected to namespace '/'. Skipping.")
+        return
 
     try:
-        # Decode the received frame
         nparr = np.frombuffer(data, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
             print("Warning: Failed to decode frame.")
             return
 
-        # Resize frame for faster processing (adjust fx/fy as needed)
-        # Using 0.5 for a balance, CNN might handle smaller sizes better if GPU is available
-        small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-        rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+        # --- Face Detection and Recognition (Simplified - No Smoothing) ---
 
-        # Find all the faces and face encodings in the current frame of video
-        # Switch to CNN model if GPU is available and dlib is compiled with CUDA
-        face_locations = face_recognition.face_locations(rgb_frame, model="cnn") # Using cnn model
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+        # Resize frame *if* needed for performance (optional)
+        if resize_factor != 1.0:
+            small_frame = cv2.resize(frame, (0, 0), fx=resize_factor, fy=resize_factor)
+            rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB) # Convert BGR to RGB
+        else:
+            # Process original frame directly
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) # Convert BGR to RGB
 
-        recognized_names = [] # Store names found in this frame
+        # Find face locations and encodings
+        # Reverted upsampling change to reduce lag
+        face_locations = face_recognition.face_locations(rgb_frame, model=detection_model)
+        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations) # num_jitters removed for simplicity like hi.py
 
-        # Draw rectangles and names around detected faces
+        recognized_names = []
+
+        # Loop through each face found in the frame
         for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-            name = "Unknown" # Default name
+            name = "Unknown Person" # Default name
 
-            # Check if there are known faces to compare against
+            # Compare against known faces
             if known_face_encodings:
-                matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=0.5)
+                matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=recognition_tolerance)
                 face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
 
-                if len(face_distances) > 0: # Ensure distances were calculated
+                if len(face_distances) > 0:
                     best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index] and face_distances[best_match_index] < 0.5: # Check distance threshold
+                    if matches[best_match_index] and face_distances[best_match_index] < recognition_tolerance:
                         name = known_face_names[best_match_index]
+                        # print(f"Detected: {name} (Distance: {face_distances[best_match_index]:.2f})") # Optional debug print
 
             recognized_names.append(name)
 
-            # --- Bounding Box Smoothing Logic --- 
-            # Add current bounding box to frame history
-            if name not in frame_history:
-                frame_history[name] = []
-            frame_history[name].append([top, right, bottom, left])
-            if len(frame_history[name]) > max_history:
-                frame_history[name].pop(0)
-
-            # Calculate the average bounding box over the last few frames
-            avg_top = int(sum(box[0] for box in frame_history[name]) / len(frame_history[name]))
-            avg_right = int(sum(box[1] for box in frame_history[name]) / len(frame_history[name]))
-            avg_bottom = int(sum(box[2] for box in frame_history[name]) / len(frame_history[name]))
-            avg_left = int(sum(box[3] for box in frame_history[name]) / len(frame_history[name]))
-
-            # Apply exponential moving average smoothing
-            if name not in smoothed_boxes:
-                smoothed_boxes[name] = [avg_top, avg_right, avg_bottom, avg_left]
+            # --- Drawing directly on the frame (like hi.py) ---
+            # Scale coordinates back up *if* frame was resized
+            if resize_factor != 1.0:
+                 scale_factor = 1 / resize_factor
+                 draw_top = int(top * scale_factor)
+                 draw_right = int(right * scale_factor)
+                 draw_bottom = int(bottom * scale_factor)
+                 draw_left = int(left * scale_factor)
             else:
-                smoothed_boxes[name][0] = int(smoothing_factor * smoothed_boxes[name][0] + (1 - smoothing_factor) * avg_top)
-                smoothed_boxes[name][1] = int(smoothing_factor * smoothed_boxes[name][1] + (1 - smoothing_factor) * avg_right)
-                smoothed_boxes[name][2] = int(smoothing_factor * smoothed_boxes[name][2] + (1 - smoothing_factor) * avg_bottom)
-                smoothed_boxes[name][3] = int(smoothing_factor * smoothed_boxes[name][3] + (1 - smoothing_factor) * avg_left)
+                 # Use coordinates directly if no resize
+                 draw_top, draw_right, draw_bottom, draw_left = top, right, bottom, left
 
-            smoothed_top, smoothed_right, smoothed_bottom, smoothed_left = smoothed_boxes[name]
-            # --- End Smoothing Logic ---
-
-            # Scale back up face locations since frame was scaled down (adjust factor based on fx/fy)
-            scale_factor = 2 # Since fx=0.5, fy=0.5
-            draw_top = smoothed_top * scale_factor
-            draw_right = smoothed_right * scale_factor
-            draw_bottom = smoothed_bottom * scale_factor
-            draw_left = smoothed_left * scale_factor
-
-            # Draw a box around the face using smoothed coordinates
-            color = (0, 255, 0) if name != "Unknown" else (0, 0, 255) # Green if known, Red if unknown
+            # Draw rectangle
+            color = (0, 255, 0) if name != "Unknown Person" else (0, 0, 255)
             cv2.rectangle(frame, (draw_left, draw_top), (draw_right, draw_bottom), color, 2)
 
-            # Draw a label with a name below the face
-            cv2.rectangle(frame, (draw_left, draw_bottom - 25), (draw_right, draw_bottom), color, cv2.FILLED)
-            font = cv2.FONT_HERSHEY_DUPLEX
-            cv2.putText(frame, name, (draw_left + 6, draw_bottom - 6), font, 0.8, (255, 255, 255), 1)
+            # Draw text label
+            # Use font and position similar to hi.py
+            cv2.putText(frame, name, (draw_left, draw_bottom + 25), cv2.FONT_HERSHEY_DUPLEX, 0.6, color, 1) # Adjusted thickness to 1 for potentially cleaner look
 
-        # Emit recognized names (only if any faces were detected)
-        if recognized_names:
-            # You might want to emit only unique names or handle multiple detections differently
-            # For now, emitting all detected names (including "Unknown")
-            sio.emit('face_recognized', {'names': recognized_names})
-            print(f"Recognized: {recognized_names}") # Log recognized names
+        # --- Emit results ---
+        try:
+            # Emit recognized names if any were found
+            if recognized_names:
+                unique_names = list(set(recognized_names))
+                if sio.connected and '/' in sio.namespaces:
+                    sio.emit('face_recognized', {'names': unique_names})
+                else:
+                     print("Warning: Cannot emit face_recognized - not connected to namespace '/'")
 
+            # Encode the frame with drawings
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+            _, buffer = cv2.imencode('.jpg', frame, encode_param)
 
-        # Encode the processed frame to JPEG
-        _, buffer = cv2.imencode('.jpg', frame)
+            # Emit the processed frame
+            if sio.connected and '/' in sio.namespaces:
+                sio.emit('processed_frame', buffer.tobytes())
+            else:
+                print("Warning: Cannot emit processed_frame - not connected to namespace '/'")
 
-        # Send the processed frame back to the Node.js server
-        sio.emit('processed_frame', buffer.tobytes())
+        except socketio.exceptions.BadNamespaceError as bne:
+             print(f"SocketIO Error during emit: {bne}. Namespace likely disconnected.")
+        except Exception as emit_err:
+             print(f"Error during emit: {emit_err}")
+        # Removed the cleanup block for stale boxes as smoothing is removed
+
     except Exception as e:
         print(f"Error processing frame: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == '__main__':
-    print("Python face recognition server is running...")
-    sio.wait()
+    print("Python face recognition server starting...")
+    try:
+        sio.wait()
+    except KeyboardInterrupt:
+        print("Interrupted by user. Disconnecting...")
+    finally:
+        if sio.connected:
+            sio.disconnect()
+        print("Server shut down.")
