@@ -5,7 +5,8 @@ export default function LogList() {
   const [logs, setLogs] = useState([]);
 
   useEffect(() => {
-    const socket = io('http://192.168.0.116:3000', {
+    // Connect to Socket.IO server (replace <laptop-ip> with actual IP)
+    const socket = io('http://localhost:30000', {
       reconnection: true,
     });
 
@@ -16,7 +17,7 @@ export default function LogList() {
           message: data.message,
           timestamp: new Date(data.timestamp * 1000).toLocaleString(),
         },
-      ].slice(-50)); // Keep last 50 logs
+      ].slice(-50));
     });
 
     return () => {

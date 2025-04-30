@@ -6,7 +6,7 @@ export default function VideoStream() {
 
   useEffect(() => {
     // Connect to Socket.IO server (replace <laptop-ip> with actual IP)
-    const socket = io('http://localhost:3000', {
+    const socket = io('192.168.46.1:3000', {
       reconnection: true,
     });
 
@@ -14,34 +14,21 @@ export default function VideoStream() {
       console.log('Connected to server');
     });
 
-    // Listen for the processed frame event from the server
-    socket.on('processed_frame', (data) => {
+    socket.on('video_frame', (data) => {
       const blob = new Blob([data], { type: 'image/jpeg' });
       const url = URL.createObjectURL(blob);
-      // Store the previous URL to revoke it after the new one is set
-      const previousUrl = frame;
       setFrame(url);
-
-      // Clean up the previous blob URL after a short delay
-      // to ensure the new image has rendered
-      if (previousUrl) {
-        setTimeout(() => URL.revokeObjectURL(previousUrl), 50); // Delay might need adjustment
-      }
+      return () => URL.revokeObjectURL(url);
     });
 
     socket.on('disconnect', () => {
       console.log('Disconnected from server');
     });
 
-    // Cleanup function
     return () => {
-      // Revoke the last frame's URL when the component unmounts
-      if (frame) {
-        URL.revokeObjectURL(frame);
-      }
       socket.disconnect();
     };
-  }, [frame]); // Add frame as a dependency to manage URL revocation correctly
+  }, []);
 
   return (
     <div className="video-container">
